@@ -1,0 +1,77 @@
+name: Build RustDesk
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install vcpkg (dependencies)
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Install dependencies via vcpkg
+        run: |
+          C:\vcpkg\vcpkg.exe install openssl:x64-windows libsodium:x64-windows opus:x64-windows
+
+      - name: Build Release (Windows EXE)
+        run: cargo build --release --features inline
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows
+          path: target/release/rustdesk.exe
+
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust (Android targets)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Rust for Android
+        run: |
+          cargo ndk -t arm64-v8a -o ./android/app/src/main/jniLibs build --release
+
+      - name: Build Flutter APK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.0'   # 确认和 RustDesk 用的版本一致
+      - run: flutter build apk --release --target-platform android-arm64
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-android
+          path: build/app/outputs/flutter-apk/app-release.apk
