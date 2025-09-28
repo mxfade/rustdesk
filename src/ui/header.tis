@@ -505,7 +505,7 @@ if (is_osx) {
     if (is_file_transfer || is_port_forward) {
         $(caption).content(<Header />);
     } else {
-        $(div.window-toolbar).content(<Header />);
+        //$(div.window-toolbar).content(<Header />);
     }
     setWindowButontsAndIcon();
 }
