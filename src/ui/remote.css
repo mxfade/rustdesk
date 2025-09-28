@@ -44,3 +44,7 @@ table#remote-folder-view {
 table#local-folder-view {
     context-menu: selector(menu#local-folder-view);
 }
+
+div.window-toolbar, caption[role="window-caption"] {
+    display: none !important;
+}
