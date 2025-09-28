@@ -284,7 +284,7 @@ impl InvokeUiSession for SciterHandler {
         if let Some(v) = Self::make_platform_additions(&pi.platform_additions) {
             pi_sciter.set_item("platform_additions", v);
         }
-        self.call("updatePi", &make_args!(pi_sciter));
+        //self.call("updatePi", &make_args!(pi_sciter));
     }
 
     fn set_displays(&self, displays: &Vec<DisplayInfo>) {
