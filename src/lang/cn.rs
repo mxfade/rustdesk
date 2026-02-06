@@ -1,6 +1,7 @@
 lazy_static::lazy_static! {
 pub static ref T: std::collections::HashMap<&'static str, &'static str> =
     [
+        ("Keep screen awake during incoming sessions", "在新会话开始时保持屏幕亮起状态"),
         ("Hide Tray", "隐藏托盘图标"),
         ("Status", "状态"),
         ("Your Desktop", "你的桌面"),
