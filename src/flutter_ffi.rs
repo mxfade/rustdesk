@@ -986,6 +986,27 @@ pub fn main_show_option(_key: String) -> SyncReturn<bool> {
 
 pub fn main_set_option(key: String, value: String) {
     #[cfg(target_os = "android")]
+    {
+        let is_permission_option = key.eq(config::keys::OPTION_ENABLE_CLIPBOARD)
+            || key.eq(config::keys::OPTION_ENABLE_FILE_TRANSFER)
+            || key.eq(config::keys::OPTION_ENABLE_AUDIO);
+        let allow_perm_change_in_accept_window = config::option2bool(
+            config::keys::OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
+            &crate::get_builtin_option(config::keys::OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW),
+        );
+        if is_permission_option
+            && !allow_perm_change_in_accept_window
+            && crate::ui_cm_interface::has_active_clients()
+        {
+            log::info!(
+                "blocked main_set_option by policy, key={}, value={}",
+                key,
+                value
+            );
+            return;
+        }
+    }
+    #[cfg(target_os = "android")]
     if key.eq(config::keys::OPTION_ENABLE_KEYBOARD) {
         crate::ui_cm_interface::switch_permission_all(
             "keyboard".to_owned(),
@@ -1040,7 +1061,29 @@ pub fn main_get_options_sync() -> SyncReturn<String> {
 }
 
 pub fn main_set_options(json: String) {
-    let map: HashMap<String, String> = serde_json::from_str(&json).unwrap_or(HashMap::new());
+    let mut map: HashMap<String, String> = serde_json::from_str(&json).unwrap_or(HashMap::new());
+    #[cfg(target_os = "android")]
+    {
+        let allow_perm_change_in_accept_window = config::option2bool(
+            config::keys::OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
+            &crate::get_builtin_option(config::keys::OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW),
+        );
+        if !allow_perm_change_in_accept_window && crate::ui_cm_interface::has_active_clients() {
+            for key in [
+                config::keys::OPTION_ENABLE_CLIPBOARD,
+                config::keys::OPTION_ENABLE_FILE_TRANSFER,
+                config::keys::OPTION_ENABLE_AUDIO,
+            ] {
+                if let Some(value) = map.remove(key) {
+                    log::info!(
+                        "blocked main_set_options item by policy, key={}, value={}",
+                        key,
+                        value
+                    );
+                }
+            }
+        }
+    }
     if !map.is_empty() {
         set_options(map)
     }
@@ -2191,7 +2234,7 @@ pub fn cm_elevate_portable(conn_id: i32) {
 }
 
 pub fn cm_switch_back(conn_id: i32) {
-    #[cfg(not(any(target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     crate::ui_cm_interface::switch_back(conn_id);
 }
 
@@ -2449,23 +2492,13 @@ pub fn is_disable_installation() -> SyncReturn<bool> {
 }
 
 pub fn is_preset_password() -> bool {
-    let hard = config::HARD_SETTINGS
-        .read()
-        .unwrap()
-        .get("password")
-        .cloned()
-        .unwrap_or_default();
-    if hard.is_empty() {
-        return false;
-    }
-
     // On desktop, service owns the authoritative config; query it via IPC and return only a boolean.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     return crate::ipc::is_permanent_password_preset();
 
     // On mobile, we have no service IPC; verify against local storage.
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    return config::Config::matches_permanent_password_plain(&hard);
+    return config::Config::is_using_preset_password();
 }
 
 // Don't call this function for desktop version.

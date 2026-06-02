@@ -126,6 +126,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   Future<void> dispose() async {
     WidgetsBinding.instance.removeObserver(this);
+    // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
+    // after several awaits (canvas save, image update, the `enable_soft_keyboard`
+    // platform call), so if the app is backgrounded while this page is disposing,
+    // dispose can be suspended before reaching it and the connection is never torn
+    // down. The reconnect then re-attaches to the leaked session and is stuck on
+    // "Connecting...". Dispatching it here makes teardown happen synchronously on
+    // pop; the `sessionClose` in `gFFI.close()` becomes a no-op once removed.
+    unawaited(bind.sessionClose(sessionId: sessionId));
     // https://github.com/flutter/flutter/issues/64935
     super.dispose();
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
@@ -1183,7 +1191,8 @@ void showOptions(
   List<TToggleMenu> privacyModeList = [];
   // privacy mode
   final privacyModeState = PrivacyModeState.find(id);
-  if (gFFI.ffiModel.keyboard && gFFI.ffiModel.pi.features.privacyMode) {
+  if ((gFFI.ffiModel.pi.features.privacyMode && gFFI.ffiModel.keyboard) ||
+      privacyModeState.isNotEmpty) {
     privacyModeList = toolbarPrivacyMode(privacyModeState, context, id, gFFI);
     if (privacyModeList.length == 1) {
       displayToggles.add(privacyModeList[0]);

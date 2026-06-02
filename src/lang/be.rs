@@ -743,5 +743,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Display Name", "Імя для адлюстравання"),
         ("password-hidden-tip", "Зададзены пастаянны пароль (скрыты)."),
         ("preset-password-in-use-tip", "Пададзены пароль цяпер выкарыстоўваецца"),
+        ("Enable privacy mode", ""),
+        ("allow-remote-toolbar-docking-any-edge", ""),
     ].iter().cloned().collect();
 }

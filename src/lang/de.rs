@@ -743,5 +743,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Display Name", "Anzeigename"),
         ("password-hidden-tip", "Ein permanentes Passwort wurde festgelegt (ausgeblendet)."),
         ("preset-password-in-use-tip", "Das voreingestellte Passwort wird derzeit verwendet."),
+        ("Enable privacy mode", "Datenschutzmodus aktivieren"),
+        ("allow-remote-toolbar-docking-any-edge", "Andocken der Remote-Symbolleiste an jeden Fensterrand zulassen"),
     ].iter().cloned().collect();
 }
