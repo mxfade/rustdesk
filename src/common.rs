@@ -1054,10 +1054,10 @@ pub fn get_api_server(api: String, custom: String) -> String {
         res.pop();
     }
     if res.starts_with("https")
-        && res.ends_with(":21114")
+        && res.ends_with(":40080")
         && get_builtin_option(keys::OPTION_ALLOW_HTTPS_21114) != "Y"
     {
-        return res.replace(":21114", "");
+        return res.replace(":40080", "");
     }
     res
 }
@@ -1081,7 +1081,7 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    "http://pro3.cencorp.com.cn".to_owned()
 }
 
 #[inline]
