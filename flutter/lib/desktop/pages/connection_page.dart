@@ -281,23 +281,38 @@ class _ConnectionPageState extends State<ConnectionPage>
   @override
   Widget build(BuildContext context) {
     final isOutgoingOnly = bind.isOutgoingOnly();
-    return Column(
+    return Stack(
       children: [
-        Expanded(
-            child: Column(
+        Column(
           children: [
-            Row(
+            Expanded(
+                child: Column(
               children: [
-                Flexible(child: _buildRemoteIDTextField(context)),
+                Row(
+                  children: [
+                    Flexible(child: _buildRemoteIDTextField(context)),
+                  ],
+                ).marginOnly(top: 22),
+                SizedBox(height: 12),
+                Divider().paddingOnly(right: 12),
+                Expanded(child: PeerTabPage()),
               ],
-            ).marginOnly(top: 22),
-            SizedBox(height: 12),
-            Divider().paddingOnly(right: 12),
-            Expanded(child: PeerTabPage()),
+            ).paddingOnly(left: 12.0)),
+            if (!isOutgoingOnly) const Divider(height: 1),
+            if (!isOutgoingOnly) OnlineStatusWidget()
           ],
-        ).paddingOnly(left: 12.0)),
-        if (!isOutgoingOnly) const Divider(height: 1),
-        if (!isOutgoingOnly) OnlineStatusWidget()
+        ),
+        Positioned(
+          top: 16,
+          right: 16,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 180, maxHeight: 48),
+            child: Image.asset(
+              'assets/Cencorp.png',
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
       ],
     );
   }
