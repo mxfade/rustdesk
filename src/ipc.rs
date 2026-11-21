@@ -1000,12 +1000,10 @@ async fn handle(data: Data, stream: &mut Connection) {
                         None
                     };
                 } else if name == "hide_cm" {
-                    value = if crate::hbbs_http::sync::is_pro() || crate::common::is_custom_client()
-                    {
-                        Some(hbb_common::password_security::hide_cm().to_string())
-                    } else {
-                        None
-                    };
+                    // This is a local setting, not a Pro/custom-client-only feature.  The
+                    // password policy is already enforced by `hide_cm()`.  Returning None for
+                    // standard builds made the CM window show once at every fresh start.
+                    value = Some(hbb_common::password_security::hide_cm().to_string());
                 } else if name == "voice-call-input" {
                     value = crate::audio_service::get_voice_call_input_device();
                 } else if name == "unlock-pin" {

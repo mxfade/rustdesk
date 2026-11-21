@@ -525,7 +525,10 @@ class _GeneralState extends State<_General> {
     final incomingOnly = bind.isIncomingOnly();
     final outgoingOnly = bind.isOutgoingOnly();
     final showAutoUpdate = (isWindows && bind.mainIsInstalled()) ||
-    (isMacOS && bind.mainIsInstalled() && bind.mainIsInstalledDaemon(prompt: false) && !bind.isCustomClient());
+        (isMacOS &&
+            bind.mainIsInstalled() &&
+            bind.mainIsInstalledDaemon(prompt: false) &&
+            !bind.isCustomClient());
     final children = <Widget>[
       if (!isWeb && !incomingOnly)
         _OptionCheckBox(context, 'Confirm before closing multiple tabs',
@@ -1145,15 +1148,16 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               child: _OptionCheckBox(context, "Enable trusted devices",
                   kOptionEnableTrustedDevices,
                   optSetter: (key, value) async {
-                try {
-                  await mainSetBoolOption(key, value);
-                } catch (error) {
-                  showToast(error.toString());
-                }
-              },
-                  enabled: !locked, update: (v) {
-                setState(() {});
-              }),
+                    try {
+                      await mainSetBoolOption(key, value);
+                    } catch (error) {
+                      showToast(error.toString());
+                    }
+                  },
+                  enabled: !locked,
+                  update: (v) {
+                    setState(() {});
+                  }),
             ),
           ),
           if (mainGetBoolOptionSync(kOptionEnableTrustedDevices))
@@ -1664,76 +1668,85 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   Widget hide_cm(bool enabled) {
-  return ChangeNotifierProvider.value(
-    value: gFFI.serverModel,
-    child: Consumer<ServerModel>(builder: (context, model, child) {
-      onHideCmChanged(bool? b) {
-        if (b != null) {
-          bind.mainSetOption(
-              key: 'allow-hide-cm', value: bool2option('allow-hide-cm', b));
+    return ChangeNotifierProvider.value(
+      value: gFFI.serverModel,
+      child: Consumer<ServerModel>(builder: (context, model, child) {
+        final hideAllowed = model.hideCmAllowed;
+        onHideCmChanged(bool? b) {
+          if (b != null) {
+            model.setHideCmOption(b);
+          }
         }
-      }
 
-      return Tooltip(
-        message: "",
-        child: GestureDetector(
-          onTap: enabled ? () => onHideCmChanged(!model.hideCm) : null,
-          child: Row(
-            children: [
-              Checkbox(
-                      value: model.hideCm,
-                      onChanged: enabled ? onHideCmChanged : null)
-                  .marginOnly(right: 5),
-              Expanded(
-                child: Text(
-                  translate('Hide connection management window'),
-                  style: TextStyle(
-                      color: disabledTextColor(context, enabled)),
+        return Tooltip(
+          message: hideAllowed ? "" : translate('hide_cm_tip'),
+          child: GestureDetector(
+            onTap: enabled && hideAllowed
+                ? () => onHideCmChanged(!model.hideCm)
+                : null,
+            child: Row(
+              children: [
+                Checkbox(
+                        value: model.hideCm,
+                        onChanged:
+                            enabled && hideAllowed ? onHideCmChanged : null)
+                    .marginOnly(right: 5),
+                Expanded(
+                  child: Text(
+                    translate('Hide connection management window'),
+                    style: TextStyle(
+                        color:
+                            disabledTextColor(context, enabled && hideAllowed)),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
-    }),
-  );
-}
+        );
+      }),
+    );
+  }
 
-Widget hide_tray(bool enabled) {
-  return ChangeNotifierProvider.value(
-    value: gFFI.serverModel,
-    child: Consumer<ServerModel>(builder: (context, model, child) {
-      onHideTrayChanged(bool? b) {
-        if (b != null) {
-          bind.mainSetOption(
-              key: 'hide-tray', value: bool2option('hide-tray', b));
+  Widget hide_tray(bool enabled) {
+    return ChangeNotifierProvider.value(
+      value: gFFI.serverModel,
+      child: Consumer<ServerModel>(builder: (context, model, child) {
+        final hideAllowed = model.hideTrayAllowed;
+        onHideTrayChanged(bool? b) {
+          if (b != null) {
+            model.setHideTrayOption(b);
+          }
         }
-      }
 
-      return Tooltip(
-        message: "",
-        child: GestureDetector(
-          onTap: enabled ? () => onHideTrayChanged(!model.hideTray) : null,
-          child: Row(
-            children: [
-              Checkbox(
-                      value: model.hideTray,
-                      onChanged: enabled ? onHideTrayChanged : null)
-                  .marginOnly(right: 5),
-              Expanded(
-                child: Text(
-                  translate('Hide Tray'),
-                  style: TextStyle(
-                      color: disabledTextColor(context, enabled)),
+        return Tooltip(
+          message: hideAllowed ? "" : translate('hide_cm_tip'),
+          child: GestureDetector(
+            onTap: enabled && hideAllowed
+                ? () => onHideTrayChanged(!model.hideTray)
+                : null,
+            child: Row(
+              children: [
+                Checkbox(
+                        value: model.hideTray,
+                        onChanged:
+                            enabled && hideAllowed ? onHideTrayChanged : null)
+                    .marginOnly(right: 5),
+                Expanded(
+                  child: Text(
+                    translate('Hide Tray'),
+                    style: TextStyle(
+                        color:
+                            disabledTextColor(context, enabled && hideAllowed)),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
-    }),
-  );
-}
+        );
+      }),
+    );
+  }
+
 /*
   Widget hide_cm(bool enabled) {
     return ChangeNotifierProvider.value(

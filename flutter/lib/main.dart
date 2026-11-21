@@ -284,13 +284,16 @@ void runMultiWindow(
 
 void runConnectionManagerScreen() async {
   await initEnv(kAppTypeConnectionManager);
+  // Read the effective policy before mounting the UI.  This used to happen
+  // after `runApp`, which gave the connection manager a visible first frame
+  // whenever the option read was slow or returned an empty value.
+  final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
+  gFFI.serverModel.hideCm = hide;
   _runApp(
     '',
     const DesktopServerPage(),
     MyTheme.currentThemeMode(),
   );
-  final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
-  gFFI.serverModel.hideCm = hide;
   if (hide) {
     await hideCmWindow(isStartup: true);
   } else {
@@ -309,6 +312,7 @@ showCmWindow({bool isStartup = false}) async {
         size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
+    await windowManager.setSkipTaskbar(false);
     await Future.wait([
       windowManager.show(),
       windowManager.focus(),
@@ -320,6 +324,7 @@ showCmWindow({bool isStartup = false}) async {
     _isCmReadyToShow = true;
   } else if (_isCmReadyToShow) {
     if (await windowManager.getOpacity() != 1) {
+      await windowManager.setSkipTaskbar(false);
       await windowManager.setOpacity(1);
       await windowManager.focus();
       await windowManager.minimize(); //needed
@@ -333,9 +338,13 @@ showCmWindow({bool isStartup = false}) async {
 hideCmWindow({bool isStartup = false}) async {
   if (isStartup) {
     WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
-        size: kConnectionManagerWindowSizeClosedChat);
-    windowManager.setOpacity(0);
-    await windowManager.waitUntilReadyToShow(windowOptions, null);
+        size: kConnectionManagerWindowSizeClosedChat, skipTaskbar: true);
+    // Await opacity before waiting for the window to become ready; otherwise
+    // the first frame can be rendered at opacity 1.
+    await windowManager.setOpacity(0);
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.hide();
+    });
     bind.mainHideDock();
     await windowManager.minimize();
     await windowManager.hide();
@@ -402,7 +411,8 @@ WindowOptions getHiddenTitleBarWindowOptions(
     {bool isMainWindow = false,
     Size? size,
     bool center = false,
-    bool? alwaysOnTop}) {
+    bool? alwaysOnTop,
+    bool skipTaskbar = false}) {
   var defaultTitleBarStyle = TitleBarStyle.hidden;
   // we do not hide titlebar on win7 because of the frame overflow.
   if (kUseCompatibleUiMode) {
@@ -412,7 +422,7 @@ WindowOptions getHiddenTitleBarWindowOptions(
     size: size,
     center: center,
     backgroundColor: (isMacOS && isMainWindow) ? null : Colors.transparent,
-    skipTaskbar: false,
+    skipTaskbar: skipTaskbar,
     titleBarStyle: defaultTitleBarStyle,
     alwaysOnTop: alwaysOnTop,
   );

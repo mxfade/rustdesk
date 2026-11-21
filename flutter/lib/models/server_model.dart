@@ -33,10 +33,12 @@ class ServerModel with ChangeNotifier {
   bool _fileOk = false;
   bool _clipboardOk = false;
   bool _showElevation = false;
-  //修复隐藏CM功能：
+  // Effective visibility state, not the raw option value. The raw values are kept
+  // separately so that a policy change cannot silently discard the user's choice.
   bool _hideCm = false;
-  //修复隐藏托盘功能：
+  bool _hideCmOption = false;
   bool _hideTray = false;
+  bool _hideTrayOption = false;
   int _connectStatus = 0; // Rendezvous Server status
   String _verificationMethod = "";
   String _temporaryPasswordLength = "";
@@ -73,7 +75,13 @@ class ServerModel with ChangeNotifier {
 
   int get connectStatus => _connectStatus;
 
-    //修复隐藏CM功能：
+  /// Hiding is allowed only when sessions are approved by password and only the
+  /// permanent password is enabled. Rust applies the same rule in
+  /// `password_security::hide_cm()` and `hide_tray()`.
+  bool get hideCmAllowed =>
+      approveMode == 'password' && verificationMethod == kUsePermanentPassword;
+  bool get hideTrayAllowed => hideCmAllowed;
+
   bool get hideCm => _hideCm;
   set hideCm(bool value) {
     if (_hideCm != value) {
@@ -88,13 +96,52 @@ class ServerModel with ChangeNotifier {
       notifyListeners();
     }
   }
-  //修复隐藏托盘图标功能：
+
   bool get hideTray => _hideTray;
   set hideTray(bool value) {
     if (_hideTray != value) {
       _hideTray = value;
       notifyListeners();
     }
+  }
+
+  Future<void> setHideCmOption(bool value) async {
+    await bind.mainSetOption(
+        key: 'allow-hide-cm', value: bool2option('allow-hide-cm', value));
+    _hideCmOption = value;
+    _applyHideOptions();
+  }
+
+  Future<void> setHideTrayOption(bool value) async {
+    await bind.mainSetOption(
+        key: 'hide-tray', value: bool2option('hide-tray', value));
+    _hideTrayOption = value;
+    _applyHideOptions();
+  }
+
+  /// Recompute the effective state from the raw option and the password policy.
+  /// This is the only place that changes visibility in response to option changes.
+  void _applyHideOptions() {
+    final allowed = hideCmAllowed;
+    final cm = _hideCmOption && allowed;
+    final tray = _hideTrayOption && allowed;
+    var changed = false;
+    if (_hideCm != cm) {
+      _hideCm = cm;
+      if (desktopType == DesktopType.cm) {
+        if (cm) {
+          hideCmWindow();
+        } else {
+          showCmWindow();
+        }
+      }
+      changed = true;
+    }
+    if (_hideTray != tray) {
+      _hideTray = tray;
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   String get verificationMethod {
@@ -113,13 +160,9 @@ class ServerModel with ChangeNotifier {
 
   setVerificationMethod(String method) async {
     await bind.mainSetOption(key: kOptionVerificationMethod, value: method);
-    /*if (method != kUsePermanentPassword) {
-      await bind.mainSetOption(
-          key: 'allow-hide-cm', value: bool2option('allow-hide-cm', false));
-      await bind.mainSetOption(
-          key: 'hide-tray', value: bool2option('hide-tray', false));
-    }*/
-    
+    // Re-evaluate the hide policy immediately instead of waiting for the next
+    // 500 ms timer tick.
+    await updatePasswordModel();
   }
 
   String get temporaryPasswordLength {
@@ -136,14 +179,8 @@ class ServerModel with ChangeNotifier {
 
   setApproveMode(String mode) async {
     await bind.mainSetOption(key: kOptionApproveMode, value: mode);
-    /*
-    if (mode != 'password') {
-      await bind.mainSetOption(
-          key: 'allow-hide-cm', value: bool2option('allow-hide-cm', false));
-      await bind.mainSetOption(
-          key: 'hide-tray', value: bool2option('hide-tray', false));
-    }
-    */
+    // The password policy is part of the hide decision; refresh it now.
+    await updatePasswordModel();
   }
 
   bool get allowNumericOneTimePassword => _allowNumericOneTimePassword;
@@ -166,26 +203,19 @@ class ServerModel with ChangeNotifier {
     _emptyIdShow = translate("Generating ...");
     _serverId = IDTextEditingController(text: _emptyIdShow);
 
-    
-    // initital _hideCm at startup
+    // Initial hide state: a raw option is only effective when the password
+    // policy allows it.  Keep both so the settings page can show the real state.
     final verificationMethod =
         bind.mainGetOptionSync(key: kOptionVerificationMethod);
     final approveMode = bind.mainGetOptionSync(key: kOptionApproveMode);
-    _hideCm = option2bool(
+    _verificationMethod = verificationMethod;
+    _approveMode = approveMode;
+    _hideCmOption = option2bool(
         'allow-hide-cm', bind.mainGetOptionSync(key: 'allow-hide-cm'));
-    /*if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      _hideCm = false;
-    }*/
-    //修复隐藏托盘图标功能：
-    // initialize _hideTray at startup
-    _hideTray = option2bool(
-        'hide-tray', bind.mainGetOptionSync(key: 'hide-tray'));
-    /*if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      _hideTray = false;
-    }*/
-    
+    _hideTrayOption =
+        option2bool('hide-tray', bind.mainGetOptionSync(key: 'hide-tray'));
+    _hideCm = _hideCmOption && hideCmAllowed;
+    _hideTray = _hideTrayOption && hideTrayAllowed;
 
     timerCallback() async {
       final connectionStatus =
@@ -204,13 +234,25 @@ class ServerModel with ChangeNotifier {
         } else {
           if (_clients.isEmpty) {
             hideCmWindow();
-            if (_zeroClientLengthCounter++ == 12) {
+            // A hidden CM stays alive: closing it would make the next incoming
+            // connection (especially a file-transfer session) start a fresh
+            // window and briefly show it.  Only the visible CM auto-closes.
+            if (hideCm) {
+              _zeroClientLengthCounter = 0;
+            } else if (_zeroClientLengthCounter++ == 12) {
               // 6 second
               windowManager.close();
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!_hideCm) showCmWindow();
+            // The option is authoritative.  Re-assert it every tick so a chat
+            // message, a newly added client or a stale visibility call cannot
+            // leave the window visible.
+            if (hideCm) {
+              hideCmWindow();
+            } else {
+              showCmWindow();
+            }
           }
         }
       }
@@ -272,22 +314,20 @@ class ServerModel with ChangeNotifier {
     final approveMode = await bind.mainGetOption(key: kOptionApproveMode);
     final numericOneTimePassword =
         await mainGetBoolOption(kOptionAllowNumericOneTimePassword);
-    
-    var hideCm = option2bool(
-        'allow-hide-cm', await bind.mainGetOption(key: 'allow-hide-cm'));
-    /*if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      hideCm = false;
-    }*/
-        //修复隐藏托盘图标功能：
-    var hideTray = option2bool(
-        'hide-tray', await bind.mainGetOption(key: 'hide-tray'));
-    /*if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      hideTray = false;
-    }*/
-    
-    if (_approveMode != approveMode) {
+
+    // Keep the raw option values; the password policy below decides whether
+    // they are effective.  An empty read means "not synced yet", not "off":
+    // treating it as false used to show the CM window for one tick.
+    final hideCmOption = await bind.mainGetOption(key: 'allow-hide-cm');
+    if (hideCmOption.isNotEmpty) {
+      _hideCmOption = option2bool('allow-hide-cm', hideCmOption);
+    }
+    final hideTrayOption = await bind.mainGetOption(key: 'hide-tray');
+    if (hideTrayOption.isNotEmpty) {
+      _hideTrayOption = option2bool('hide-tray', hideTrayOption);
+    }
+
+    if (approveMode.isNotEmpty && _approveMode != approveMode) {
       _approveMode = approveMode;
       update = true;
     }
@@ -306,7 +346,8 @@ class ServerModel with ChangeNotifier {
     if (oldPwdText != _serverPasswd.text) {
       update = true;
     }
-    if (_verificationMethod != verificationMethod) {
+    if (verificationMethod.isNotEmpty &&
+        _verificationMethod != verificationMethod) {
       _verificationMethod = verificationMethod;
       update = true;
     }
@@ -321,23 +362,10 @@ class ServerModel with ChangeNotifier {
       _allowNumericOneTimePassword = numericOneTimePassword;
       update = true;
     }
-    
-    if (_hideCm != hideCm) {
-      _hideCm = hideCm;
-      if (desktopType == DesktopType.cm) {
-        if (hideCm) {
-          await hideCmWindow();
-        } else {
-          await showCmWindow();
-        }
-      }
-      update = true;
-    }
-    //修复隐藏托盘图标功能：
-    if (_hideTray != hideTray) {
-      _hideTray = hideTray;
-      update = true;
-    }
+
+    // Apply the policy after approve mode and verification method are up to
+    // date, so one tick never uses a stale policy and flashes the window.
+    _applyHideOptions();
     if (update) {
       notifyListeners();
     }
@@ -569,9 +597,9 @@ class ServerModel with ChangeNotifier {
       }
     }
     if (desktopType == DesktopType.cm) {
-      if (_clients.isEmpty) {
+      if (_clients.isEmpty || hideCm) {
         hideCmWindow();
-      } else if (!hideCm) {
+      } else {
         showCmWindow();
       }
     }
@@ -615,8 +643,12 @@ class ServerModel with ChangeNotifier {
         _clients.removeAt(index_disconnected);
         tabController.remove(index_disconnected);
       }
-      if (desktopType == DesktopType.cm && !hideCm) {
-        showCmWindow();
+      if (desktopType == DesktopType.cm) {
+        if (hideCm) {
+          hideCmWindow();
+        } else {
+          showCmWindow();
+        }
       }
       scrollToBottom();
       notifyListeners();

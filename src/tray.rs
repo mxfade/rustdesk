@@ -149,8 +149,12 @@ fn make_tray() -> hbb_common::ResultType<()> {
         use tao::platform::macos::EventLoopExtMacOS;
         event_loop.set_activation_policy(tao::platform::macos::ActivationPolicy::Accessory);
     }
-    // 若配置为隐藏托盘，初始化后立即通过IPC通知事件循环隐藏托盘
-    let hide_tray = crate::ui_interface::get_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y";
+    // 若配置为隐藏托盘，初始化后立即通过IPC通知事件循环隐藏托盘。
+    // 内置策略优先；否则使用与隐藏连接窗口相同的密码策略。
+    let hide_tray = crate::ui_interface::get_builtin_option(
+        hbb_common::config::keys::OPTION_HIDE_TRAY,
+    ) == "Y"
+        || hbb_common::password_security::hide_tray();
     #[cfg(windows)]
     if hide_tray {
         // 通过 IPC 向事件循环发送隐藏托盘指令
@@ -273,6 +277,12 @@ fn make_tray() -> hbb_common::ResultType<()> {
                         .map(|t| t.set_tooltip(Some(tooltip(count))));
                 }
                 Data::HideTray(hide) => {
+                    // A custom build can force the icon hidden; the local setting must not
+                    // be able to bring it back.
+                    let hide = hide
+                        || crate::ui_interface::get_builtin_option(
+                            hbb_common::config::keys::OPTION_HIDE_TRAY,
+                        ) == "Y";
                     let mut tray_guard = _tray_icon.lock().unwrap();
                     if hide {
                         // 销毁图标对象以隐藏

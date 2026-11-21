@@ -1099,10 +1099,15 @@ pub fn main_set_option(key: String, value: String) -> hbb_common::anyhow::Result
         crate::common::test_rendezvous_server();
     } else {
         set_option(key.clone(), value.clone());
-        // 检测到 hide-tray 选项变化时，通过 IPC 通知 tray 进程动态隐藏/显示图标
+        // 隐藏托盘是策略与本地设置的组合：本地开关变化，或批准方式/验证方式变化，
+        // 都要重新计算有效值并通知 tray 进程。否则会出现“设置已禁用但图标仍隐藏”的状态。
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if key.eq(config::keys::OPTION_HIDE_TRAY) {
-            let hide = value == "Y";
+        if key.eq(config::keys::OPTION_HIDE_TRAY)
+            || key.eq(keys::OPTION_APPROVE_MODE)
+            || key.eq(keys::OPTION_VERIFICATION_METHOD)
+        {
+            let hide = crate::get_builtin_option(keys::OPTION_HIDE_TRAY) == "Y"
+                || hbb_common::password_security::hide_tray();
             std::thread::spawn(move || {
                 send_hide_tray_message(hide);
             });
