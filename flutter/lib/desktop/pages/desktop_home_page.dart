@@ -94,7 +94,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (!isOutgoingOnly) buildPasswordBoard(context),
       FutureBuilder<Widget>(
         future: Future.value(
-            Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
+            Obx(() => buildHelpCards(
+                stateGlobal.updateUrl.value,
+                stateGlobal.updateVersion.value,
+                stateGlobal.updateNotes.value))),
         builder: (_, data) {
           if (data.hasData) {
             if (isIncomingOnly) {
@@ -428,7 +431,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
-  Widget buildHelpCards(String updateUrl) {
+  Widget buildHelpCards(String updateUrl, String updateVersion,
+      String updateNotes) {
     if (isWindows &&
         !bind.isDisableInstallation() &&
         bind.mainIsInstalled() &&
@@ -440,14 +444,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         await start_service(true);
       });
     }
-    if (!bind.isCustomClient() &&
-        updateUrl.isNotEmpty &&
-        !isCardClosed &&
-        bind.mainUriPrefixSync().contains('rustdesk')) {
-      final isToUpdate = (isWindows || isMacOS) && bind.mainIsInstalled();
+    if (updateUrl.isNotEmpty && !isCardClosed) {
+      // Updates are now delivered by the self-hosted api-server, both for
+      // installed and portable clients.
+      final isToUpdate = isWindows || isMacOS;
       String btnText = isToUpdate ? 'Update' : 'Download';
       GestureTapCallback onPressed = () async {
-        final Uri url = Uri.parse('https://rustdesk.com/download');
+        final Uri url = Uri.parse(updateUrl);
         await launchUrl(url);
       };
       if (isToUpdate) {
@@ -455,16 +458,23 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           handleUpdate(updateUrl);
         };
       }
+      final version = updateVersion.trim();
+      final notes = updateNotes.trim();
+      final shortNotes = notes.length > 180
+          ? '${notes.substring(0, 180)}...'
+          : notes;
+      final content =
+          "${translate("new-version-of-{${bind.mainGetAppNameSync()}}-tip")}"
+          "${version.isEmpty ? "" : " ($version)"}."
+          "${shortNotes.isEmpty ? "" : "\n$shortNotes"}";
       return buildInstallCard(
           "Status",
-          "${translate("new-version-of-{${bind.mainGetAppNameSync()}}-tip")} (${bind.mainGetNewVersion()}).",
+          content,
           btnText,
           onPressed,
           closeButton: true,
-          help: isToUpdate ? 'Changelog' : null,
-          link: isToUpdate
-              ? 'https://github.com/rustdesk/rustdesk/releases/tag/${bind.mainGetNewVersion()}'
-              : null);
+          help: null,
+          link: null);
     }
     if (systemError.isNotEmpty) {
       return buildInstallCard("", systemError, "", () {});

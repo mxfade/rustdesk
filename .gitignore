@@ -60,3 +60,4 @@ flutter/web/
 /third_party/libdrmtap/
 # Local git worktrees
 .worktrees/
+flutter/build_backup_20261120/

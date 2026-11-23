@@ -3,7 +3,7 @@ use crate::{
     hbbs_http::create_http_client_with_url_strict,
     update_metadata::{UpdateArtifactQuery, UpdateMetadataRequirements, VerifiedUpdateArtifact},
 };
-use hbb_common::{bail, ResultType};
+use hbb_common::{bail, get_version_number, ResultType};
 use std::{
     io::Read,
     path::{Component, Path, PathBuf},
@@ -16,6 +16,70 @@ const UPDATE_METADATA_SIDECAR_MAX_BYTES: u64 = 1024 * 1024;
 
 lazy_static::lazy_static! {
     static ref VERIFIED_UPDATE_ARTIFACT: Mutex<Option<VerifiedUpdateArtifact>> = Mutex::new(None);
+    static ref API_UPDATE_ARTIFACT: Mutex<Option<ApiUpdateArtifact>> = Mutex::new(None);
+}
+
+/// An installer published by the self-hosted api-server. Unlike the GitHub
+/// release flow there is no signed metadata sidecar; the API response carries
+/// the SHA256 and size, and we verify the downloaded bytes against them.
+#[derive(Clone, Debug)]
+pub struct ApiUpdateArtifact {
+    pub version: String,
+    pub url: String,
+    pub file_name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+pub fn set_api_update_artifact(artifact: ApiUpdateArtifact) -> ResultType<()> {
+    let url = url::Url::parse(&artifact.url)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        bail!("Invalid api update url: {}", artifact.url);
+    }
+    if !is_plain_update_filename(&artifact.file_name) {
+        bail!("Invalid api update file name: {}", artifact.file_name);
+    }
+    let ext = Path::new(&artifact.file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(ext.as_str(), "exe" | "msi" | "dmg") {
+        bail!("Unsupported api update file format: {}", artifact.file_name);
+    }
+    if artifact.size == 0 || artifact.size > 1024 * 1024 * 1024 {
+        bail!("Invalid api update size: {}", artifact.size);
+    }
+    if artifact.sha256.len() != 64
+        || !artifact.sha256.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        bail!("Invalid api update sha256");
+    }
+    if get_version_number(&artifact.version) <= 0 {
+        bail!("Invalid api update version: {}", artifact.version);
+    }
+    *API_UPDATE_ARTIFACT.lock().unwrap() = Some(artifact);
+    Ok(())
+}
+
+pub fn api_update_artifact_for_url(download_url: &str) -> Option<ApiUpdateArtifact> {
+    API_UPDATE_ARTIFACT
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|artifact| artifact.url == download_url)
+        .cloned()
+}
+
+pub fn get_api_update_download_file(artifact: &ApiUpdateArtifact) -> Option<PathBuf> {
+    if !is_plain_update_filename(&artifact.file_name) {
+        return None;
+    }
+    Some(std::env::temp_dir().join(&artifact.file_name))
 }
 
 pub(crate) fn current_update_platform() -> &'static str {

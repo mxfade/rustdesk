@@ -8,6 +8,7 @@ use hbb_common::{
     directories_next,
     futures::future::join_all,
     log,
+    protobuf::Message as _,
     rendezvous_proto::*,
     tokio,
 };
@@ -24,7 +25,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::common::SOFTWARE_UPDATE_URL;
+use crate::common::{SOFTWARE_UPDATE_URL, SOFTWARE_UPDATE_VERSION};
 #[cfg(feature = "flutter")]
 use crate::hbbs_http::account;
 #[cfg(not(any(target_os = "ios")))]
@@ -800,6 +801,10 @@ pub fn current_is_wayland() -> bool {
 
 #[inline]
 pub fn get_new_version() -> String {
+    let version = SOFTWARE_UPDATE_VERSION.lock().unwrap().clone();
+    if !version.is_empty() {
+        return version;
+    }
     SOFTWARE_UPDATE_URL
         .lock()
         .unwrap()
@@ -1552,6 +1557,9 @@ pub async fn change_id_shared(id: String, old_id: String) -> String {
 }
 
 pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
+    if id == old_id {
+        return "ID already in use";
+    }
     if !hbb_common::is_valid_custom_id(&id) {
         log::debug!(
             "debugging invalid id: \"{id}\", len: {}, base64: \"{}\"",
@@ -1563,14 +1571,6 @@ pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
         return INVALID_FORMAT;
     }
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let uuid = Bytes::from(
-        hbb_common::machine_uid::get()
-            .unwrap_or("".to_owned())
-            .as_bytes()
-            .to_vec(),
-    );
-    #[cfg(any(target_os = "android", target_os = "ios"))]
     let uuid = Bytes::from(hbb_common::get_uuid());
 
     if uuid.is_empty() {
@@ -1611,12 +1611,94 @@ pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
     err
 }
 
+async fn check_id_udp(
+    rendezvous_server: String,
+    old_id: String,
+    id: String,
+    uuid: Bytes,
+) -> &'static str {
+    // hbbs in this deployment only implements RegisterPk on its UDP listener;
+    // its TCP listener answers NOT_SUPPORT. Check over UDP first.
+    let addr = if rendezvous_server.contains(':') {
+        rendezvous_server.clone()
+    } else {
+        format!("{}:{}", rendezvous_server, RENDEZVOUS_PORT)
+    };
+    let socket = match hbb_common::tokio::net::UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(e) => {
+            log::debug!("check id udp bind failed: {}", e);
+            return UNKNOWN_ERROR;
+        }
+    };
+    let mut msg_out = Message::new();
+    msg_out.set_register_pk(RegisterPk {
+        old_id,
+        id,
+        uuid,
+        pk: Config::get_key_pair().1.into(),
+        ..Default::default()
+    });
+    let data = match msg_out.write_to_bytes() {
+        Ok(d) => d,
+        Err(e) => {
+            log::debug!("check id udp encode failed: {}", e);
+            return UNKNOWN_ERROR;
+        }
+    };
+    if let Err(e) = socket.send_to(&data, addr.as_str()).await {
+        log::debug!("check id udp send failed: {}", e);
+        return UNKNOWN_ERROR;
+    }
+    let start = hbb_common::tokio::time::Instant::now();
+    let mut buf = [0u8; 1500];
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        match hbb_common::tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            socket.recv_from(&mut buf),
+        )
+        .await
+        {
+            Ok(Ok((n, _))) => {
+                if let Ok(msg_in) = Message::parse_from_bytes(&buf[..n]) {
+                    if let Some(rendezvous_message::Union::RegisterPkResponse(rpr)) = msg_in.union {
+                        return match rpr.result.enum_value() {
+                            Ok(register_pk_response::Result::OK) => "",
+                            Ok(register_pk_response::Result::ID_EXISTS)
+                            | Ok(register_pk_response::Result::UUID_MISMATCH) => "ID already in use",
+                            Ok(register_pk_response::Result::TOO_FREQUENT) => "Too frequent",
+                            Ok(register_pk_response::Result::NOT_SUPPORT) => "server_not_support",
+                            _ => UNKNOWN_ERROR,
+                        };
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                log::debug!("check id udp recv failed: {}", e);
+                return UNKNOWN_ERROR;
+            }
+            Err(_) => {}
+        }
+    }
+    UNKNOWN_ERROR
+}
+
 async fn check_id(
     rendezvous_server: String,
     old_id: String,
     id: String,
     uuid: Bytes,
 ) -> &'static str {
+    let udp_res = check_id_udp(
+        rendezvous_server.clone(),
+        old_id.clone(),
+        id.clone(),
+        uuid.clone(),
+    )
+    .await;
+    if udp_res != UNKNOWN_ERROR && udp_res != "server_not_support" {
+        return udp_res;
+    }
     if let Ok(mut socket) = hbb_common::socket_client::connect_tcp(
         crate::check_port(rendezvous_server, RENDEZVOUS_PORT),
         CONNECT_TIMEOUT,
@@ -1628,6 +1710,7 @@ async fn check_id(
             old_id,
             id,
             uuid,
+            pk: Config::get_key_pair().1.into(),
             ..Default::default()
         });
         let mut ok = false;
@@ -1642,7 +1725,12 @@ async fn check_id(
                                 ok = true;
                             }
                             Ok(register_pk_response::Result::ID_EXISTS) => {
-                                return "Not available";
+                                return "ID already in use";
+                            }
+                            Ok(register_pk_response::Result::UUID_MISMATCH) => {
+                                // The private hbbs used by this client reports an
+                                // occupied ID as UUID_MISMATCH instead of ID_EXISTS.
+                                return "ID already in use";
                             }
                             Ok(register_pk_response::Result::TOO_FREQUENT) => {
                                 return "Too frequent";

@@ -75,12 +75,9 @@ class ServerModel with ChangeNotifier {
 
   int get connectStatus => _connectStatus;
 
-  /// Hiding is allowed only when sessions are approved by password and only the
-  /// permanent password is enabled. Rust applies the same rule in
-  /// `password_security::hide_cm()` and `hide_tray()`.
-  bool get hideCmAllowed =>
-      approveMode == 'password' && verificationMethod == kUsePermanentPassword;
-  bool get hideTrayAllowed => hideCmAllowed;
+  /// The hide options are explicit user choices and are always available.
+  bool get hideCmAllowed => true;
+  bool get hideTrayAllowed => true;
 
   bool get hideCm => _hideCm;
   set hideCm(bool value) {
@@ -88,7 +85,7 @@ class ServerModel with ChangeNotifier {
       _hideCm = value;
       if (desktopType == DesktopType.cm) {
         if (value) {
-          hideCmWindow();
+          if (!hasPendingApproval) hideCmWindow();
         } else {
           showCmWindow();
         }
@@ -130,7 +127,7 @@ class ServerModel with ChangeNotifier {
       _hideCm = cm;
       if (desktopType == DesktopType.cm) {
         if (cm) {
-          hideCmWindow();
+          if (!hasPendingApproval) hideCmWindow();
         } else {
           showCmWindow();
         }
@@ -157,6 +154,13 @@ class ServerModel with ChangeNotifier {
   }
 
   String get approveMode => _approveMode;
+
+  /// Incoming sessions that still need the local user to click Accept.
+  /// The connection-manager window must stay visible while such a request is
+  /// pending, even when the user normally hides it.
+  bool get hasPendingApproval =>
+      _approveMode != 'password' &&
+      _clients.any((c) => !c.authorized && !c.disconnected);
 
   setVerificationMethod(String method) async {
     await bind.mainSetOption(key: kOptionVerificationMethod, value: method);
@@ -248,7 +252,9 @@ class ServerModel with ChangeNotifier {
             // The option is authoritative.  Re-assert it every tick so a chat
             // message, a newly added client or a stale visibility call cannot
             // leave the window visible.
-            if (hideCm) {
+            // Keep the accept prompt reachable while a click approval is
+            // pending. Once accepted, the next tick hides the window again.
+            if (hideCm && !hasPendingApproval) {
               hideCmWindow();
             } else {
               showCmWindow();
@@ -327,7 +333,8 @@ class ServerModel with ChangeNotifier {
       _hideTrayOption = option2bool('hide-tray', hideTrayOption);
     }
 
-    if (approveMode.isNotEmpty && _approveMode != approveMode) {
+    // An empty approve-mode is the default "both" mode, not "not synced".
+    if (_approveMode != approveMode) {
       _approveMode = approveMode;
       update = true;
     }

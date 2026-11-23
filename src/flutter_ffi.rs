@@ -2844,6 +2844,11 @@ pub fn main_get_common(key: String) -> String {
         } else if let Some(release_page_url) = key.strip_prefix("verified-download-url-") {
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
+                if let Some(artifact) =
+                    crate::updater::api_update_artifact_for_url(release_page_url)
+                {
+                    return artifact.url;
+                }
                 return match verified_update_artifact_for_release_page_url(release_page_url) {
                     Ok(artifact) => artifact.url,
                     Err(e) => format!("error:{}", e),
@@ -2938,7 +2943,32 @@ pub fn main_set_common(_key: String, _value: String) {
         if _key == "download-new-version" {
             let download_url = _value.clone();
             let event_key = "download-new-version".to_owned();
-            let data =
+            let data = if let Some(api_artifact) =
+                crate::updater::api_update_artifact_for_url(&download_url)
+            {
+                if let Some(download_file) =
+                    crate::updater::get_api_update_download_file(&api_artifact)
+                {
+                    let options = crate::hbbs_http::downloader::DownloadOptions {
+                        expected_size: api_artifact.size,
+                        artifact_sha256: api_artifact.sha256,
+                        allow_http: true,
+                    };
+                    match crate::hbbs_http::downloader::download_file(
+                        api_artifact.url,
+                        Some(download_file),
+                        options,
+                    ) {
+                        Ok(id) => HashMap::from([("name", event_key), ("id", id)]),
+                        Err(e) => HashMap::from([("name", event_key), ("error", e.to_string())]),
+                    }
+                } else {
+                    HashMap::from([
+                        ("name", event_key),
+                        ("error", "Invalid api update file name".to_owned()),
+                    ])
+                }
+            } else {
                 match crate::updater::verified_update_artifact_for_download_url(&download_url) {
                     Ok(artifact) => {
                         if let Some(download_file) =
@@ -2947,6 +2977,7 @@ pub fn main_set_common(_key: String, _value: String) {
                             let options = crate::hbbs_http::downloader::DownloadOptions {
                                 expected_size: artifact.size,
                                 artifact_sha256: artifact.sha256,
+                                allow_http: false,
                             };
                             match crate::hbbs_http::downloader::download_file(
                                 artifact.url,
@@ -2969,28 +3000,44 @@ pub fn main_set_common(_key: String, _value: String) {
                         ("name", event_key),
                         ("error", format!("Failed to verify update metadata, {}", e)),
                     ]),
-                };
+                }
+            };
             let _res = flutter::push_global_event(
                 flutter::APP_TYPE_MAIN,
                 serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
             );
         } else if _key == "update-me" {
-            let artifact = match crate::updater::verified_update_artifact_for_download_url(&_value)
-            {
-                Ok(artifact) => artifact,
-                Err(e) => {
-                    let error = format!("Failed to verify update metadata, {}", e);
-                    log::error!("{}", error);
-                    push_update_me_error(error);
-                    return;
-                }
-            };
-            let Some(new_version_file) = get_update_download_file_from_url(&artifact.url) else {
-                let error = "Failed to resolve downloaded update file path".to_owned();
-                log::error!("{}", error);
-                push_update_me_error(error);
-                return;
-            };
+            let (new_version_file, sha256, size) =
+                if let Some(api_artifact) =
+                    crate::updater::api_update_artifact_for_url(&_value)
+                {
+                    let Some(file) = crate::updater::get_api_update_download_file(&api_artifact)
+                    else {
+                        let error = "Failed to resolve api update file path".to_owned();
+                        log::error!("{}", error);
+                        push_update_me_error(error);
+                        return;
+                    };
+                    (file, api_artifact.sha256, api_artifact.size)
+                } else {
+                    let artifact = match crate::updater::verified_update_artifact_for_download_url(&_value)
+                    {
+                        Ok(artifact) => artifact,
+                        Err(e) => {
+                            let error = format!("Failed to verify update metadata, {}", e);
+                            log::error!("{}", error);
+                            push_update_me_error(error);
+                            return;
+                        }
+                    };
+                    let Some(file) = get_update_download_file_from_url(&artifact.url) else {
+                        let error = "Failed to resolve downloaded update file path".to_owned();
+                        log::error!("{}", error);
+                        push_update_me_error(error);
+                        return;
+                    };
+                    (file, artifact.sha256, artifact.size)
+                };
             let Some(new_version_file_str) = new_version_file.to_str() else {
                 let error = "Invalid UTF-8 path for downloaded update file".to_owned();
                 log::error!("{}", error);
@@ -3002,17 +3049,15 @@ pub fn main_set_common(_key: String, _value: String) {
                 new_version_file_str
             );
             #[cfg(target_os = "windows")]
-            let update_res = crate::platform::update_to_verified(
-                new_version_file_str,
-                &artifact.sha256,
-                artifact.size,
-            );
+            let update_res =
+                crate::platform::update_to_verified(new_version_file_str, &sha256, size);
             #[cfg(target_os = "macos")]
-            let update_res = crate::platform::macos::update_to_verified_dmg(
-                new_version_file_str,
-                &artifact.sha256,
-                Some(artifact.size),
-            );
+            let update_res =
+                crate::platform::macos::update_to_verified_dmg(
+                    new_version_file_str,
+                    &sha256,
+                    Some(size),
+                );
             if update_res.is_err() {
                 crate::updater::remove_update_file(&new_version_file);
             }

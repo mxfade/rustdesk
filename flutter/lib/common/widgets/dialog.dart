@@ -77,9 +77,8 @@ void changeIdDialog() {
   final RxString rxId = controller.text.trim().obs;
 
   final rules = [
-    RegexValidationRule('starts with a letter', RegExp(r'^[a-zA-Z]')),
     LengthRangeValidationRule(6, 16),
-    RegexValidationRule('allowed characters', RegExp(r'^[\w-]*$'))
+    RegexValidationRule('allowed characters', RegExp(r'^[a-zA-Z0-9_-]*$'))
   ];
 
   gFFI.dialogManager.show((setState, close, context) {
@@ -1024,6 +1023,36 @@ _connectDialog(
       }
     }
 
+    waitForRemoteAccept() {
+      if (osUsernameController != null) {
+        if (osUsernameController.text.trim().isEmpty) {
+          errUsername.value = translate('Empty Username');
+          setState(() {});
+          return;
+        }
+      }
+      final osUsername = osUsernameController?.text.trim() ?? '';
+      final osPassword = osPasswordController?.text.trim() ?? '';
+      // Empty password lets a peer that allows click access put the request
+      // into its pending-accept queue. Peer-side policy is not exposed before
+      // login, so the option is offered for every password prompt; the wait
+      // dialog can always be cancelled.
+      gFFI.login(
+        osUsername,
+        osPassword,
+        sessionId,
+        '',
+        rememberPassword,
+      );
+      close();
+      showWaitAcceptDialog(
+          sessionId,
+          'wait-remote-accept-nook',
+          'Prompt',
+          'Please wait for the remote side to accept your session request...',
+          dialogManager);
+    }
+
     descWidget(String text) {
       return Column(
         children: [
@@ -1099,6 +1128,8 @@ _connectDialog(
       return Column(
         children: [
           descWidget(translate('verify_rustdesk_password_tip')),
+          if (passwordController != null)
+            descWidget(translate('wait_for_accept_tip')),
           PasswordWidget(
             controller: passwordController,
             autoFocus: osUsernameController == null,
@@ -1132,6 +1163,13 @@ _connectDialog(
         passwdWidget(),
       ]),
       actions: [
+        if (passwordController != null)
+          dialogButton(
+            'Wait for Confirmation',
+            icon: Icon(Icons.hourglass_top_rounded),
+            onPressed: waitForRemoteAccept,
+            isOutline: true,
+          ),
         dialogButton(
           'Cancel',
           icon: Icon(Icons.close_rounded),
@@ -1403,7 +1441,18 @@ void showWaitAcceptDialog(SessionID sessionId, String type, String title,
 
     return CustomAlertDialog(
       title: null,
-      content: msgboxContent(type, title, text),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          msgboxContent(type, title, text),
+          const SizedBox(height: 14),
+          const SizedBox(
+            width: 26,
+            height: 26,
+            child: CircularProgressIndicator(strokeWidth: 2.6),
+          ),
+        ],
+      ),
       actions: [
         dialogButton('Cancel', onPressed: onCancel, isOutline: true),
       ],
@@ -2816,7 +2865,8 @@ void confrimDeleteTrustedDevicesDialog(
         trustedDevices.clear();
         selectedDevices.clear();
       } else {
-        final json = jsonEncode(selectedDevices.map((e) => e.toList()).toList());
+        final json =
+            jsonEncode(selectedDevices.map((e) => e.toList()).toList());
         await bind.mainRemoveTrustedDevices(json: json);
         trustedDevices.removeWhere((element) {
           return selectedDevices.contains(element.recordId);

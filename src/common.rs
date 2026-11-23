@@ -93,6 +93,7 @@ pub mod input {
 
 lazy_static::lazy_static! {
     pub static ref SOFTWARE_UPDATE_URL: Arc<Mutex<String>> = Default::default();
+    pub static ref SOFTWARE_UPDATE_VERSION: Arc<Mutex<String>> = Default::default();
     pub static ref DEVICE_ID: Arc<Mutex<String>> = Default::default();
     pub static ref DEVICE_NAME: Arc<Mutex<String>> = Default::default();
     static ref PUBLIC_IPV6_ADDR: Arc<Mutex<(Option<SocketAddr>, Option<Instant>)>> = Default::default();
@@ -1067,9 +1068,6 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
-    if is_custom_client() {
-        return;
-    }
     let opt = LocalConfig::get_option(keys::OPTION_ENABLE_CHECK_UPDATE);
     if config::option2bool(keys::OPTION_ENABLE_CHECK_UPDATE, &opt) {
         std::thread::spawn(move || allow_err!(do_check_software_update()));
@@ -1157,6 +1155,8 @@ pub(crate) fn display_version_from_release_id(release_id: &str) -> ResultType<St
 fn clear_software_update_url() {
     let mut update_url = SOFTWARE_UPDATE_URL.lock().unwrap();
     *update_url = String::new();
+    drop(update_url);
+    *SOFTWARE_UPDATE_VERSION.lock().unwrap() = String::new();
 }
 
 fn process_software_update_check_response(bytes: Bytes) -> ResultType<()> {
@@ -1182,53 +1182,121 @@ fn process_software_update_check_response(bytes: Bytes) -> ResultType<()> {
     Ok(())
 }
 
-// No need to check `danger_accept_invalid_cert` for now.
-// Because the url is always `https://api.rustdesk.com/version/latest`.
-#[tokio::main(flavor = "current_thread")]
-pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
-    let (request, url) =
-        hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
-    let proxy_conf = Config::get_socks();
-    let tls_url = get_url_for_tls(&url, &proxy_conf);
-    let tls_type = get_cached_tls_type(tls_url);
-    let is_tls_not_cached = tls_type.is_none();
-    let tls_type = tls_type.unwrap_or(TlsType::Rustls);
-    let client = create_http_client_async(tls_type, false);
-    let latest_release_response: ResultType<_> = match client.post(&url).json(&request).send().await
-    {
-        Ok(resp) => Ok((tls_type, resp)),
-        Err(err) => {
-            if is_tls_not_cached && err.is_request() {
-                let tls_type = TlsType::NativeTls;
-                let client = create_http_client_async(tls_type, false);
-                match client.post(&url).json(&request).send().await {
-                    Ok(resp) => Ok((tls_type, resp)),
-                    Err(err) => Err(err.into()),
-                }
-            } else {
-                Err(err.into())
-            }
-        }
-    };
-    let response_bytes = match latest_release_response {
-        Ok((used_tls_type, response)) => {
-            upsert_tls_cache(tls_url, used_tls_type, false);
-            let status = response.status();
-            if !status.is_success() {
-                Err(anyhow!(
-                    "Software update check failed with HTTP status: {status}"
-                ))
-            } else {
-                response.bytes().await.map_err(|err| err.into())
-            }
-        }
-        Err(err) => Err(err),
-    };
-    let result = response_bytes.and_then(process_software_update_check_response);
-    if result.is_err() {
+// Update checks now come from the self-hosted api-server instead of the
+// official api.rustdesk.com endpoint.
+#[derive(serde::Deserialize)]
+struct ApiUpdateEnvelope {
+    #[serde(default)]
+    code: i32,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    data: Option<ApiUpdateInfo>,
+}
+
+#[derive(serde::Deserialize)]
+struct ApiUpdateInfo {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    file_name: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    sha256: String,
+    #[serde(default)]
+    notes: String,
+}
+
+#[cfg(target_os = "windows")]
+fn current_update_is_msi() -> bool {
+    crate::platform::windows::is_msi_installed().unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_update_is_msi() -> bool {
+    false
+}
+
+pub fn do_check_software_update() -> hbb_common::ResultType<()> {
+    let api_server = crate::get_api_server(
+        Config::get_option("api-server"),
+        Config::get_option("custom-rendezvous-server"),
+    );
+    if api_server.is_empty() {
         clear_software_update_url();
+        return Ok(());
     }
-    result
+    let platform = crate::updater::current_update_platform();
+    let arch = crate::updater::current_update_arch();
+    let format = crate::updater::current_update_format(current_update_is_msi());
+    let url = format!(
+        "{}/api/client/update/latest?platform={}&arch={}&format={}&current_version={}",
+        api_server.trim_end_matches('/'),
+        platform,
+        arch,
+        format,
+        crate::VERSION,
+    );
+    let client = crate::hbbs_http::create_http_client_with_url(&url);
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .with_context(|| format!("Failed to query api-server update info: {url}"))?;
+    if !response.status().is_success() {
+        bail!("Api-server update check failed with HTTP status: {}", response.status());
+    }
+    let envelope: ApiUpdateEnvelope = response.json()?;
+    if envelope.code != 0 {
+        bail!(
+            "Api-server update check failed: {}",
+            if envelope.message.is_empty() {
+                format!("code {}", envelope.code)
+            } else {
+                envelope.message
+            }
+        );
+    }
+    let Some(info) = envelope.data else {
+        clear_software_update_url();
+        return Ok(());
+    };
+    if get_version_number(&info.version) <= get_version_number(crate::VERSION) {
+        clear_software_update_url();
+        return Ok(());
+    }
+    let artifact = crate::updater::ApiUpdateArtifact {
+        version: info.version.clone(),
+        url: info.url.clone(),
+        file_name: info.file_name.clone(),
+        size: info.size,
+        sha256: info.sha256.clone(),
+    };
+    crate::updater::set_api_update_artifact(artifact)?;
+    log::info!(
+        "Api-server update available: {} ({}) {} {}",
+        info.version,
+        info.file_name,
+        info.size,
+        info.notes
+    );
+    *SOFTWARE_UPDATE_URL.lock().unwrap() = info.url.clone();
+    *SOFTWARE_UPDATE_VERSION.lock().unwrap() = info.version.clone();
+    #[cfg(feature = "flutter")]
+    {
+        let mut m = HashMap::new();
+        m.insert("name", "check_software_update_finish");
+        m.insert("url", &info.url);
+        m.insert("version", &info.version);
+        m.insert("notes", &info.notes);
+        if let Ok(data) = serde_json::to_string(&m) {
+            let _ = crate::flutter::push_global_event(crate::flutter::APP_TYPE_MAIN, data);
+        }
+    }
+    Ok(())
 }
 
 #[inline]
@@ -1317,7 +1385,7 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "http://pro3.cencorp.com.cn".to_owned()
+    "http://pro3.cencorp.com.cn:40080".to_owned()
 }
 
 #[inline]

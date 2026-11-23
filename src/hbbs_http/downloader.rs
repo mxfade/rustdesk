@@ -1,4 +1,4 @@
-use super::create_http_client_async_with_url_strict;
+use super::{create_http_client_async_with_url, create_http_client_async_with_url_strict};
 use hbb_common::{
     bail,
     lazy_static::lazy_static,
@@ -58,6 +58,9 @@ impl Downloader {
 pub struct DownloadOptions {
     pub expected_size: u64,
     pub artifact_sha256: String,
+    // Official GitHub artifacts require HTTPS. Self-hosted api-server installers
+    // may be served over plain HTTP, so allow HTTP only for that flow.
+    pub allow_http: bool,
 }
 
 struct DownloadRequest {
@@ -65,6 +68,7 @@ struct DownloadRequest {
     url: String,
     path: Option<PathBuf>,
     expected_size: u64,
+    allow_http: bool,
 }
 
 // The caller should check if the file is downloaded successfully and remove the job from the map.
@@ -127,6 +131,7 @@ pub fn download_file(
         url,
         path,
         expected_size: options.expected_size,
+        allow_http: options.allow_http,
     };
     let worker_id = id.clone();
     std::thread::spawn(move || match do_download(request, rx) {
@@ -197,7 +202,11 @@ async fn do_download(
     request: DownloadRequest,
     mut rx_cancel: UnboundedReceiver<()>,
 ) -> ResultType<bool> {
-    let client = create_http_client_async_with_url_strict(&request.url).await?;
+    let client = if request.allow_http {
+        create_http_client_async_with_url(&request.url).await
+    } else {
+        create_http_client_async_with_url_strict(&request.url).await?
+    };
 
     let mut is_all_downloaded = false;
     let mut downloaded_size = 0_u64;

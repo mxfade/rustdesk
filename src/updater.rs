@@ -5,7 +5,8 @@ use crate::common::do_check_software_update;
 use artifact::verified_update_artifact_from_release_page_url;
 pub(crate) use artifact::{current_update_arch, current_update_format, current_update_platform};
 pub use artifact::{
-    current_update_artifact_query, get_update_download_file_from_url,
+    current_update_artifact_query, get_api_update_download_file, get_update_download_file_from_url,
+    set_api_update_artifact, ApiUpdateArtifact, api_update_artifact_for_url,
     verified_update_artifact_for_download_url, verified_update_artifact_for_release_page_url,
 };
 use base::config::keys;
@@ -206,6 +207,12 @@ fn check_update(manually: bool) -> ResultType<()> {
     if update_url.is_empty() {
         log::debug!("No update available.");
     } else {
+        if artifact::api_update_artifact_for_url(&update_url).is_some() {
+            // The self-hosted api-server installer is downloaded and installed
+            // by the Flutter update dialog, not the legacy GitHub verifier.
+            log::debug!("Api-server update is available; GUI will handle it.");
+            return Ok(());
+        }
         let update_format = current_update_format(update_msi);
         if update_format == "unknown" {
             log::debug!("Automatic update is not supported on this platform.");
